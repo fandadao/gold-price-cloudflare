@@ -12,6 +12,14 @@ GOLD_API_KEY: 你的goldapi.io API密钥
 主要配置参数：
 
 
+; CONFIG object holds configuration constants for the application.
+; 
+; CACHE_TTL: The time-to-live for cached data in seconds. Default is 300 seconds (5 minutes).
+; OUNCE_TO_GRAM: Conversion factor to convert weight from ounces to grams.
+; GOLD_API_URL: The primary API endpoint for fetching gold price in CNY.
+; FALLBACK_API_URL: The fallback API endpoint for fetching gold price in case the primary API fails.
+; API_KEY: The API key for authentication, retrieved from an environment variable.
+; KV_NAMESPACE: The KV namespace binding for storing and retrieving cached gold price data.
 <JAVASCRIPT>
 const CONFIG = {
   CACHE_TTL: 300, // 5分钟缓存(秒)
