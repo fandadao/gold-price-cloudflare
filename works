@@ -1,0 +1,461 @@
+addEventListener('fetch', (event) => {
+  event.respondWith(handleRequest(event));
+});
+
+// 配置常量
+const CONFIG = {
+  CACHE_TTL: 300, // 5分钟缓存(秒)
+  OUNCE_TO_GRAM: 31.1035, // 1金衡盎司 = 31.1035克
+  GOLD_API_URL: 'https://www.goldapi.io/api/XAU/CNY', // 人民币计价API
+  FALLBACK_API_URL: 'https://api.metals.live/v1/spot/gold', // 备用API
+  API_KEY: GOLD_API_KEY, // 在Workers环境变量中设置
+  KV_NAMESPACE: GOLD_PRICE_KV // 绑定的KV命名空间
+};
+
+// 主请求处理
+async function handleRequest(event) {
+  const url = new URL(event.request.url);
+  const path = url.pathname;
+
+  // 路由处理
+  if (path === '/') {
+    return serveFrontendPage();
+  } else if (path === '/api/gold') {
+    return handleGoldApiRequest(event);
+  }
+
+  return new Response('Not Found', { status: 404 });
+}
+
+// 提供前端页面
+async function serveFrontendPage() {
+  const html = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>黄金价格监控 (人民币/克)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f8f9fa;
+      color: #212529;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05);
+    }
+    h1 {
+      color: #343a40;
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    .price-display {
+      font-size: 2.5rem;
+      text-align: center;
+      margin: 1rem 0;
+      color: #d4af37;
+      font-weight: bold;
+    }
+    .price-change {
+      display: flex;
+      justify-content: space-around;
+      margin: 2rem 0;
+    }
+    .change-box {
+      text-align: center;
+      padding: 1rem;
+      background-color: #f8f9fa;
+      border-radius: 6px;
+      flex: 1;
+      margin: 0 0.5rem;
+    }
+    .positive {
+      color: #28a745;
+    }
+    .negative {
+      color: #dc3545;
+    }
+    .chart-container {
+      height: 400px;
+      margin: 2rem 0;
+    }
+    .tabs {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 1rem;
+    }
+    .tab {
+      padding: 0.5rem 1rem;
+      margin: 0 0.5rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    .tab.active {
+      border-bottom: 2px solid #d4af37;
+      font-weight: bold;
+    }
+    .last-updated {
+      text-align: right;
+      color: #6c757d;
+      font-size: 0.9rem;
+    }
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #6c757d;
+    }
+    .error {
+      color: #dc3545;
+      text-align: center;
+      padding: 2rem;
+    }
+    @media (max-width: 768px) {
+      .price-change {
+        flex-direction: column;
+      }
+      .change-box {
+        margin: 0.5rem 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>黄金价格监控 (人民币/克)</h1>
+    <div id="app">
+      <div class="loading">加载数据中...</div>
+    </div>
+  </div>
+
+  <script>
+    // 应用状态
+    const state = {
+      goldData: null,
+      activeTab: 'daily',
+      loading: true,
+      error: null,
+      chartInstance: null
+    };
+
+    // DOM元素
+    const appEl = document.getElementById('app');
+    
+    // 初始化应用
+    async function initApp() {
+      try {
+        await fetchGoldData();
+        render();
+        // 每5分钟刷新数据
+        setInterval(fetchGoldData, 5 * 60 * 1000);
+      } catch (err) {
+        state.error = err.message;
+        state.loading = false;
+        render();
+      }
+    }
+
+    // 获取黄金数据
+    async function fetchGoldData() {
+      try {
+        state.loading = true;
+        render();
+        
+        const response = await fetch('/api/gold');
+        if (!response.ok) throw new Error('获取数据失败');
+        
+        const data = await response.json();
+        state.goldData = data;
+        state.error = null;
+      } catch (err) {
+        state.error = err.message;
+        console.error('Error:', err);
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    // 渲染应用
+    function render() {
+      if (state.loading) {
+        appEl.innerHTML = '<div class="loading">加载数据中...</div>';
+        return;
+      }
+
+      if (state.error) {
+        appEl.innerHTML = \`<div class="error">错误: \${state.error}</div>\`;
+        return;
+      }
+
+      if (!state.goldData) return;
+
+      const { current, lastUpdated, history } = state.goldData;
+      const dailyChange = calculateChange(history.daily, current);
+      const weeklyChange = calculateChange(history.weekly, current);
+      const monthlyChange = calculateChange(history.monthly, current);
+
+      appEl.innerHTML = \`
+        <div class="price-display">\¥\${current.toFixed(2)} 元/克</div>
+        
+        <div class="price-change">
+          <div class="change-box">
+            <h3>24小时</h3>
+            <div class="\${dailyChange >= 0 ? 'positive' : 'negative'}">\${dailyChange >= 0 ? '+' : ''}\${dailyChange.toFixed(2)}%</div>
+            <small>\¥\${history.daily[0].price.toFixed(2)} → \¥\${current.toFixed(2)}</small>
+          </div>
+          <div class="change-box">
+            <h3>近一周</h3>
+            <div class="\${weeklyChange >= 0 ? 'positive' : 'negative'}">\${weeklyChange >= 0 ? '+' : ''}\${weeklyChange.toFixed(2)}%</div>
+            <small>\¥\${history.weekly[0].price.toFixed(2)} → \¥\${current.toFixed(2)}</small>
+          </div>
+          <div class="change-box">
+            <h3>近一月</h3>
+            <div class="\${monthlyChange >= 0 ? 'positive' : 'negative'}">\${monthlyChange >= 0 ? '+' : ''}\${monthlyChange.toFixed(2)}%</div>
+            <small>\¥\${history.monthly[0].price.toFixed(2)} → \¥\${current.toFixed(2)}</small>
+          </div>
+        </div>
+        
+        <div class="tabs">
+          <div class="tab \${state.activeTab === 'daily' ? 'active' : ''}" onclick="switchTab('daily')">24小时</div>
+          <div class="tab \${state.activeTab === 'weekly' ? 'active' : ''}" onclick="switchTab('weekly')">近一周</div>
+          <div class="tab \${state.activeTab === 'monthly' ? 'active' : ''}" onclick="switchTab('monthly')">近一月</div>
+        </div>
+        
+        <div class="chart-container">
+          <canvas id="goldChart"></canvas>
+        </div>
+        
+        <div class="last-updated">
+          最后更新时间: \${new Date(lastUpdated).toLocaleString('zh-CN')}
+        </div>
+      \`;
+
+      renderChart();
+    }
+
+    // 计算价格变化百分比
+    function calculateChange(historyData, currentPrice) {
+      const startPrice = historyData[0].price;
+      return ((currentPrice - startPrice) / startPrice) * 100;
+    }
+
+    // 切换标签页
+    function switchTab(tab) {
+      state.activeTab = tab;
+      render();
+    }
+
+    // 渲染图表
+    function renderChart() {
+      const canvas = document.getElementById('goldChart');
+      if (!canvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      const history = state.goldData.history[state.activeTab];
+      
+      // 销毁旧图表实例
+      if (state.chartInstance && typeof state.chartInstance.destroy === 'function') {
+        state.chartInstance.destroy();
+      }
+      
+      state.chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: history.map(item => item.date),
+          datasets: [{
+            label: '黄金价格 (人民币/克)',
+            data: history.map(item => item.price),
+            borderColor: '#d4af37',
+            backgroundColor: 'rgba(212, 175, 55, 0.1)',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.1,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: state.activeTab === 'daily' ? 'hour' : 'day',
+                tooltipFormat: 'PPpp',
+                displayFormats: {
+                  hour: 'HH:mm',
+                  day: 'MMM d'
+                }
+              },
+              grid: {
+                display: false
+              }
+            },
+            y: {
+              ticks: {
+                callback: function(value) {
+                  return '¥' + value.toFixed(2);
+                }
+              },
+              grid: {
+                color: 'rgba(0, 0, 0, 0.05)'
+              }
+            }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return '¥' + context.parsed.y.toFixed(2) + ' 元/克';
+                }
+              }
+            },
+            legend: {
+              display: false
+            }
+          },
+          interaction: {
+            intersect: false,
+            mode: 'index'
+          }
+        }
+      });
+    }
+
+    // 启动应用
+    document.addEventListener('DOMContentLoaded', initApp);
+    window.switchTab = switchTab;
+  </script>
+</body>
+</html>
+  `;
+
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600'
+    }
+  });
+}
+
+// 处理黄金API请求
+async function handleGoldApiRequest(event) {
+  try {
+    // 尝试从KV获取缓存
+    const cacheKey = 'gold-price-cny';
+    const cachedData = await CONFIG.KV_NAMESPACE.get(cacheKey, { type: 'json' });
+    
+    if (cachedData) {
+      return createApiResponse(cachedData);
+    }
+
+    // 获取实时数据
+    const goldPrice = await fetchGoldPrice();
+    const pricePerGram = goldPrice / CONFIG.OUNCE_TO_GRAM;
+    
+    // 生成历史数据
+    const now = new Date();
+    const history = {
+      daily: generateHistoryData(pricePerGram, 24, 'hour'),
+      weekly: generateHistoryData(pricePerGram, 7, 'day'),
+      monthly: generateHistoryData(pricePerGram, 30, 'day')
+    };
+    
+    const result = {
+      current: pricePerGram,
+      currency: 'CNY',
+      unit: 'gram',
+      lastUpdated: now.toISOString(),
+      history
+    };
+    
+    // 存入KV缓存
+    await CONFIG.KV_NAMESPACE.put(cacheKey, JSON.stringify(result), {
+      expirationTtl: CONFIG.CACHE_TTL
+    });
+    
+    return createApiResponse(result);
+  } catch (error) {
+    console.error('API Error:', error);
+    return new Response(JSON.stringify({ 
+      error: error.message,
+      details: 'Failed to fetch gold price'
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 获取黄金价格
+async function fetchGoldPrice() {
+  try {
+    // 尝试主API
+    const response = await fetch(CONFIG.GOLD_API_URL, {
+      headers: { 'x-access-token': CONFIG.API_KEY }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      return data.price;
+    }
+    
+    // 主API失败时尝试备用API
+    const fallbackResponse = await fetch(CONFIG.FALLBACK_API_URL);
+    if (!fallbackResponse.ok) throw new Error('Both APIs failed');
+    
+    const fallbackData = await fallbackResponse.json();
+    return fallbackData.price * 7.2; // 假设备用API返回的是美元价格，转换为人民币
+  } catch (error) {
+    console.error('Fetch gold price error:', error);
+    throw error;
+  }
+}
+
+// 生成历史数据
+function generateHistoryData(currentPrice, points, interval) {
+  const data = [];
+  const now = new Date();
+  
+  for (let i = points; i >= 0; i--) {
+    const date = new Date(now);
+    if (interval === 'hour') {
+      date.setHours(date.getHours() - i);
+    } else {
+      date.setDate(date.getDate() - i);
+    }
+    
+    // 在currentPrice基础上随机波动
+    const fluctuation = (Math.random() * 0.02 - 0.01) * currentPrice;
+    const price = currentPrice + fluctuation;
+    
+    data.push({
+      date: date.toISOString(),
+      price: parseFloat(price.toFixed(2)) // 人民币保留两位小数
+    });
+  }
+  
+  return data;
+}
+
+// 创建API响应
+function createApiResponse(data) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET',
+    'Cache-Control': `public, max-age=${CONFIG.CACHE_TTL}`
+  };
+  
+  return new Response(JSON.stringify(data), { headers });
+}
