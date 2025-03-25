@@ -1,11 +1,16 @@
 # gold-price-cloudflare
 黄金价格监控系统（人民币/克）
+
 自定义配置说明
+
 环境变量设置：
 
 GOLD_API_KEY: 你的goldapi.io API密钥
+
 在Cloudflare Workers设置中添加KV命名空间并绑定变量名GOLD_PRICE_KV
+
 主要配置参数：
+
 
 <JAVASCRIPT>
 const CONFIG = {
@@ -16,6 +21,7 @@ const CONFIG = {
   API_KEY: GOLD_API_KEY, // 从环境变量获取
   KV_NAMESPACE: GOLD_PRICE_KV // 绑定的KV命名空间
 };
+  
 数据流说明：
 
 用户访问根路径/时，返回完整的前端HTML页面
@@ -48,19 +54,3 @@ Worker首先检查KV缓存，有有效缓存则直接返回
 容错处理：主API不可用时使用备用API
 完整包含：前后端一体化部署，无需额外基础设施
 
-更新后
-主要修复点
-图表实例管理：
-
-将图表实例存储在应用状态 state.chartInstance 中而不是全局 window 对象
-添加了类型检查确保 destroy() 方法存在
-安全渲染：
-
-添加了 canvas 元素存在性检查
-改进了图表销毁逻辑
-其他优化：
-
-添加了移动端响应式样式
-改进了错误处理流程
-优化了代码组织结构
-这个版本解决了原始错误，同时提高了代码的健壮性和可维护性。部署时请确保已设置好必要的环境变量和KV命名空间。
